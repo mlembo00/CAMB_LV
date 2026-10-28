@@ -449,6 +449,9 @@ class CAMBdata(F2003Class):
                                                                     raw_cl=raw_cl)
         
         #!!ML LV -- start: rotating the spectra
+        # All rotation formulas below implement Sec. 2 (Eqs. 2.18-2.24) of
+        # Caloni et al. 2023, "Probing Lorentz-violating electrodynamics with
+        # CMB polarization", arXiv:2212.04867.
         if self.Params.lmin_AF < lmax:
             #we are taking the min between lmax_AF and lmax-2 since ell_vec (computed up to min(...)+2) has to have the same length as P[spectrum][:lmax] if lmax < lmax_AF
             if config.FeedbackLevel > 0 and not getattr(self, '_LV_rotation_announced', False):
@@ -480,6 +483,19 @@ class CAMBdata(F2003Class):
             K33_lp1 = (ell_vec+3.)/(2.*(2.*ell_vec+1.))
             K33_lp2 = ((ell_vec+3.)*(ell_vec+4.))/(4.*(4.*ell2_vec+8.*ell_vec+3.))
             
+
+            # temporarily fetch any spectra needed for the rotation but not originally requested
+            _tmp_added = []
+            for _key, _getter in [
+                ('lensed_scalar',   'get_lensed_scalar_cls'),
+                ('tensor',          'get_tensor_cls'),
+                ('unlensed_scalar', 'get_unlensed_scalar_cls'),
+                ('unlensed_total',  'get_unlensed_total_cls'),
+                ('total',           'get_total_cls'),
+            ]:
+                if _key not in P:
+                    P[_key] = getattr(self, _getter)(lmax, CMB_unit=CMB_unit, raw_cl=False)
+                    _tmp_added.append(_key)
 
             ## start: filling 'lensed_scalar', 'tensor' and 'total'
             clee_scal_lens = P['lensed_scalar'][:lmax_AF_eff+2,1]*prefac_dl2cl
@@ -576,15 +592,52 @@ class CAMBdata(F2003Class):
                            K33_lp2[lmin_AF_eff:lmax_AF_eff] * (self.Params.beta2_B * clee_scal_lens[lmin_AF_eff+2:lmax_AF_eff+2]) 
             
 
-            #adding another column to the power spectra to be filled with ClVV
-            P = {k: np.append(P[k], np.zeros((len(P[k]),1)), axis = 1) for k in P.keys()}
+            # TB and EB from LV, both proportional to sqrt(beta^2_{AF,T}):
+            #   C^TB_l = sqrt(beta^2_{AF,T}) * ~C^TE_l
+            #   C^EB_l = sqrt(beta^2_{AF,T}) * (~C^EE_l - ~C^BB_l)
+            # For EB, the BB contribution is tensor-only (lensing BB is not
+            # rotated, so it does not enter EB). TE enters TB both for scalar
+            # and tensor sectors; lensed C^TE is used for lensed_scalar/total,
+            # unlensed C^TE for unlensed_*.
+            sqrt_beta_AFT = np.sqrt(self.Params.beta2_0)
 
-            P['unlensed_total'][lmin_AF_eff:lmax_AF_eff,4] = (newclvv_scal+newclvv_tens)*prefac_cl2dl
-            P['unlensed_scalar'][lmin_AF_eff:lmax_AF_eff,4] = newclvv_scal*prefac_cl2dl
-            P['lensed_scalar'][lmin_AF_eff:lmax_AF_eff,4] = newclvv_scal_lens*prefac_cl2dl
-            P['tensor'][lmin_AF_eff:lmax_AF_eff,4] = newclvv_tens*prefac_cl2dl
-            P['total'][lmin_AF_eff:lmax_AF_eff,4] = (newclvv_scal_lens+newclvv_tens)*prefac_cl2dl
+            newcltb_scal      = sqrt_beta_AFT * clte_scal[lmin_AF_eff:lmax_AF_eff]
+            newcltb_scal_lens = sqrt_beta_AFT * clte_scal_lens[lmin_AF_eff:lmax_AF_eff]
+            newcltb_tens      = sqrt_beta_AFT * clte_tens[lmin_AF_eff:lmax_AF_eff]
 
+            newcleb_scal      = sqrt_beta_AFT * clee_scal[lmin_AF_eff:lmax_AF_eff]
+            newcleb_scal_lens = sqrt_beta_AFT * clee_scal_lens[lmin_AF_eff:lmax_AF_eff]
+            newcleb_tens      = sqrt_beta_AFT * (clee_tens[lmin_AF_eff:lmax_AF_eff]
+                                                 - clbb_tens[lmin_AF_eff:lmax_AF_eff])
+
+            # Column layout: [TT, EE, BB, TE, TB, EB, VV] -- add 3 new columns.
+            P = {k: np.append(P[k], np.zeros((len(P[k]),3)), axis = 1) for k in P.keys()}
+
+            # TB at column 4
+            P['unlensed_scalar'][lmin_AF_eff:lmax_AF_eff,4] = newcltb_scal*prefac_cl2dl
+            P['unlensed_total' ][lmin_AF_eff:lmax_AF_eff,4] = (newcltb_scal + newcltb_tens)*prefac_cl2dl
+            P['lensed_scalar'  ][lmin_AF_eff:lmax_AF_eff,4] = newcltb_scal_lens*prefac_cl2dl
+            P['tensor'         ][lmin_AF_eff:lmax_AF_eff,4] = newcltb_tens*prefac_cl2dl
+            P['total'          ][lmin_AF_eff:lmax_AF_eff,4] = (newcltb_scal_lens + newcltb_tens)*prefac_cl2dl
+
+            # EB at column 5
+            P['unlensed_scalar'][lmin_AF_eff:lmax_AF_eff,5] = newcleb_scal*prefac_cl2dl
+            P['unlensed_total' ][lmin_AF_eff:lmax_AF_eff,5] = (newcleb_scal + newcleb_tens)*prefac_cl2dl
+            P['lensed_scalar'  ][lmin_AF_eff:lmax_AF_eff,5] = newcleb_scal_lens*prefac_cl2dl
+            P['tensor'         ][lmin_AF_eff:lmax_AF_eff,5] = newcleb_tens*prefac_cl2dl
+            P['total'          ][lmin_AF_eff:lmax_AF_eff,5] = (newcleb_scal_lens + newcleb_tens)*prefac_cl2dl
+
+            # VV at column 6
+            P['unlensed_scalar'][lmin_AF_eff:lmax_AF_eff,6] = newclvv_scal*prefac_cl2dl
+            P['unlensed_total' ][lmin_AF_eff:lmax_AF_eff,6] = (newclvv_scal+newclvv_tens)*prefac_cl2dl
+            P['lensed_scalar'  ][lmin_AF_eff:lmax_AF_eff,6] = newclvv_scal_lens*prefac_cl2dl
+            P['tensor'         ][lmin_AF_eff:lmax_AF_eff,6] = newclvv_tens*prefac_cl2dl
+            P['total'          ][lmin_AF_eff:lmax_AF_eff,6] = (newclvv_scal_lens+newclvv_tens)*prefac_cl2dl
+
+
+            # remove temporarily fetched spectra so only originally-requested ones are returned
+            for _key in _tmp_added:
+                del P[_key]
 
         else:
             print('Warning: lmin_AF is greater than the lmax_tensor!')
