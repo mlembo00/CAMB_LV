@@ -448,11 +448,13 @@ class CAMBdata(F2003Class):
             P[spectrum] = getattr(self, 'get_' + spectrum + '_cls')(lmax, CMB_unit=CMB_unit,
                                                                     raw_cl=raw_cl)
         
-        #!!ML CPT -- start: rotating the spectra
+        #!!ML LV -- start: rotating the spectra
         if self.Params.lmin_AF < lmax:
             #we are taking the min between lmax_AF and lmax-2 since ell_vec (computed up to min(...)+2) has to have the same length as P[spectrum][:lmax] if lmax < lmax_AF
-            print('Scalars are rotated up to', min(lmax-2, self.Params.lmax_AF))
-            print('Tensors are rotated up to', min(lmax-2, self.Params.max_l_tensor, self.Params.lmax_AF))
+            if config.FeedbackLevel > 0 and not getattr(self, '_LV_rotation_announced', False):
+                print('LV rotation: scalars up to l =', min(lmax-2, self.Params.lmax_AF))
+                print('LV rotation: tensors up to l =', min(lmax-2, self.Params.max_l_tensor, self.Params.lmax_AF))
+                self._LV_rotation_announced = True
 
             twopi = 2.0 * np.pi
             lmax_AF_eff = min(lmax-2, self.Params.lmax_AF)+1
@@ -587,7 +589,7 @@ class CAMBdata(F2003Class):
         else:
             print('Warning: lmin_AF is greater than the lmax_tensor!')
             print('CAMB will not be stopped but the spectra will be not rotated.')
-        #!!ML CPT -- end: rotating the spectra
+        #!!ML LV -- end: rotating the spectra
 
         return P
 
