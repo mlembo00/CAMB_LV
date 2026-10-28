@@ -497,6 +497,19 @@ class CAMBdata(F2003Class):
                     P[_key] = getattr(self, _getter)(lmax, CMB_unit=CMB_unit, raw_cl=False)
                     _tmp_added.append(_key)
 
+            # The LV computation below assumes P contains D_l = l(l+1)C_l/(2 pi).
+            # If the user asked for raw_cl=True, their original P[spectrum] entries
+            # contain C_l instead, which would make the kernel mixing wrong (see
+            # arXiv issue in CAMB_LV repo). Convert user-requested entries to D_l
+            # here; we convert back at the end of the LV block.
+            if raw_cl:
+                _n_ell = max(P[_k].shape[0] for _k in P)
+                _ell_dl = np.arange(_n_ell, dtype=np.float64)
+                _ell_dl_factor = _ell_dl * (_ell_dl + 1.0) / (2.0 * np.pi)
+                for _k in P:
+                    if _k not in _tmp_added:
+                        P[_k] = P[_k] * _ell_dl_factor[:P[_k].shape[0], np.newaxis]
+
             ## start: filling 'lensed_scalar', 'tensor' and 'total'
             clee_scal_lens = P['lensed_scalar'][:lmax_LV_eff+2,1]*prefac_dl2cl
             clte_scal_lens = P['lensed_scalar'][:lmax_LV_eff+2,3]*prefac_dl2cl
@@ -634,6 +647,17 @@ class CAMBdata(F2003Class):
             P['tensor'         ][lmin_LV_eff:lmax_LV_eff,6] = newclvv_tens*prefac_cl2dl
             P['total'          ][lmin_LV_eff:lmax_LV_eff,6] = (newclvv_scal_lens+newclvv_tens)*prefac_cl2dl
 
+
+            # If raw_cl was requested, convert user-returned entries from D_l back
+            # to C_l (inverse of the conversion we did before the kernel mixing).
+            if raw_cl:
+                _n_ell = max(P[_k].shape[0] for _k in P)
+                _ell_cl = np.arange(_n_ell, dtype=np.float64)
+                _ell_cl[0] = 1.0  # avoid div-by-zero at l=0; C_l[0] is 0 anyway
+                _ell_cl_factor = (2.0 * np.pi) / (_ell_cl * (_ell_cl + 1.0))
+                for _k in P:
+                    if _k not in _tmp_added:
+                        P[_k] = P[_k] * _ell_cl_factor[:P[_k].shape[0], np.newaxis]
 
             # remove temporarily fetched spectra so only originally-requested ones are returned
             for _key in _tmp_added:
